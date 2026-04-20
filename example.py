@@ -1,33 +1,43 @@
-from events import system as event_system
+from dataclasses import dataclass
+
+from events.annotations import event_listener, event_model, event_source, subscribes
 
 
-event_system.init()
-
-from events.annotations import event_listener, event_model, event_source
+USER_CREATED = "user.created"
 
 
-@event_model(event_type="user.created")
+@event_model(event_type=USER_CREATED)
+@dataclass
 class UserCreatedEvent:
-	type: str
-	target: object | None
-
-	def __init__(self, username: str):
-		self.username = username
+	username: str
 
 
-@event_listener(event_type="user.created")
-def print_user_created(event: UserCreatedEvent) -> None:
-	print(f"received event '{event.type}' for user '{event.username}'")
+class UserService:
+	@event_source(event_type=USER_CREATED)
+	def create_user(self, username: str) -> UserCreatedEvent:
+		print(f"[service] Creating user: {username}")
+		return UserCreatedEvent(username=username)
 
 
-@event_source(event_type="user.created")
-def create_user(username: str) -> UserCreatedEvent:
-	print(f"creating user '{username}'")
-	return UserCreatedEvent(username)
+@subscribes
+class ConsoleAuditLogger:
+	@event_listener(event_type=USER_CREATED)
+	def on_user_created(self, event: UserCreatedEvent) -> None:
+		print(f"[listener] Received {USER_CREATED} for: {event.username}")
 
 
 def main() -> None:
-	create_user("alice")
+	logger = ConsoleAuditLogger()
+	service = UserService()
+
+	print("[demo] First event should be handled")
+	service.create_user("alice")
+
+	print("[demo] Unsubscribing listener")
+	logger.unsubscribe(USER_CREATED)
+
+	print("[demo] Second event should NOT be handled")
+	service.create_user("bob")
 
 
 if __name__ == "__main__":
