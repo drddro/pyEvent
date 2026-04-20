@@ -48,7 +48,17 @@ class _EventMixin:
 def _inject_event_machinery(cls: type) -> type:
     if _EventMixin in cls.__mro__:
         return cls
-    return type(cls.__name__, (_EventMixin, cls), dict(cls.__dict__))
+
+    original_init = cls.__dict__.get("__init__")
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if original_init is not None:
+            original_init(self, *args, **kwargs)
+        _EventMixin.__init__(self)
+
+    attrs = dict(cls.__dict__)
+    attrs["__init__"] = __init__
+    return type(cls.__name__, (_EventMixin, cls), attrs)
 
 
 # region decorator api
