@@ -1,7 +1,12 @@
 from collections.abc import Callable
 from functools import wraps
-from typing import Any
+from typing import Any, ParamSpec, Self, TypeVar, cast
 from events.system import EventError, get_event_system
+
+P = ParamSpec("P")
+R = TypeVar("R")
+TClass = TypeVar("TClass", bound=type[Any])
+TModel = TypeVar("TModel", bound=type[Any])
 
 
 class Subscription:
@@ -20,7 +25,7 @@ class _EventMixin:
     def __init_subclass__(cls, **kwargs: Any):
         super().__init_subclass__(**kwargs)
         cls._event_listeners = {
-            method._of_event_type: method  # type:ignore
+            cast(str, getattr(method, "_of_event_type", "")): method
             for method in vars(cls).values()
             if callable(method) and getattr(method, "_is_event_listener", False)
         }
@@ -45,25 +50,25 @@ class _EventMixin:
 
 
 # region internal helpers
-def _inject_event_machinery(cls: type) -> type:
+def _inject_event_machinery(cls: TClass) -> TClass:
     if _EventMixin in cls.__mro__:
         return cls
 
     original_init = cls.__dict__.get("__init__")
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if original_init is not None:
+    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
+        if callable(original_init):
             original_init(self, *args, **kwargs)
         _EventMixin.__init__(self)
 
     attrs = dict(cls.__dict__)
     attrs["__init__"] = __init__
-    return type(cls.__name__, (_EventMixin, cls), attrs)
+    return cast(TClass, type(cls.__name__, (_EventMixin, cls), attrs))
 
 
 # region decorator api
-def event_model(*, event_type: str) -> Callable[[type], type]:
-    def event_model_decorator(cls: type) -> type:
+def event_model(*, event_type: str) -> Callable[[TModel], TModel]:
+    def event_model_decorator(cls: TModel) -> TModel:
         cls._event_type = event_type
         cls._is_event_model = True
         get_event_system().register_event_type(event_type, cls)
@@ -71,32 +76,32 @@ def event_model(*, event_type: str) -> Callable[[type], type]:
     return event_model_decorator
 
 
-def event_listener(*, event_type: str) -> Callable:             # type: ignore
-    def event_listener_decorator(func: Callable) -> Callable:   # type: ignore
-        func._of_event_type = event_type                        # type: ignore
-        func._is_event_listener = True                          # type: ignore
-        return func                                             # type: ignore
-    return event_listener_decorator                             # type: ignore
+def event_listener(*, event_type: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def event_listener_decorator(func: Callable[P, R]) -> Callable[P, R]:
+        setattr(func, "_of_event_type", event_type)
+        setattr(func, "_is_event_listener", True)
+        return func
+    return event_listener_decorator
 
 
-def subscribes(cls: type) -> type:
+def subscribes(cls: TClass) -> TClass:
     """Class decorator — injects event machinery for @event_listener methods."""
     return _inject_event_machinery(cls)
 
 
-def event_source(*, event_type: str) -> Callable:                                               # type: ignore
-    def event_source_decorator(func: Callable) -> Callable:                                     # type: ignore
-        @wraps(func)                                                                    # type: ignore
-        def wrapper(self, *args: Any, **kwargs: Any) -> Any:                                    # type: ignore
-            event = func(self, *args, **kwargs)                                            # type: ignore                                     
-            if not hasattr(event, "_event_type") or event._event_type != event_type:   # type: ignore
+def event_source(*, event_type: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def event_source_decorator(func: Callable[P, R]) -> Callable[P, R]:
+        @wraps(func)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> R:
+            event: R = func(self, *args, **kwargs)
+            if not hasattr(event, "_event_type") or getattr(event, "_event_type", None) != event_type:
                 raise EventError(
                     f"Expected event model of type '{event_type}', "
-                    f"got {type(event).__name__}"                                               # type: ignore
+                    f"got {type(event).__name__}"
                 )
             event_system = get_event_system()
             if event_system.is_registered_event_type(event_type):
-                event_system.fire(event)                                                  # type: ignore
-            return event                                                                        # type: ignore
-        return wrapper                                                                          # type: ignore
-    return event_source_decorator                                                               # type: ignore
+                event_system.fire(event)
+            return event
+        return wrapper  # type: ignore[return-value]
+    return event_source_decorator
